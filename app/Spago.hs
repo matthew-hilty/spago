@@ -135,6 +135,11 @@ parser = do
     watchFlag =
       let wrap = \case
             "clear" -> Just WatchAndClear
+            _ -> Just Watch
+      in CLI.optional $ Opts.option (Opts.maybeReader wrap) $ Opts.metavar "WATCH" <> Opts.long "watch" <> Opts.short 'w' <> Opts.help "Watch for changes in local files and automatically rebuild. Set to `clear` to clear the screen on rebuild"
+    watchFlag' =
+      let wrap = \case
+            "clear" -> Just WatchAndClear
             _       -> Just Watch
           watchSwitch = (flip fmap) (CLI.switch "watch" 'w' "Watch for changes in local files and automatically rebuild.") $ \case
             True  -> Just Watch
