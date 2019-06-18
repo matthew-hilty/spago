@@ -2,6 +2,8 @@ module Spago.Prelude
   ( echo
   , echoStr
   , echoDebug
+  , echoWarning
+  , echoError
   , tshow
   , die
   , Dhall.Core.throws
@@ -65,7 +67,9 @@ module Spago.Prelude
 
 import qualified Control.Concurrent.Async.Pool as Async
 import qualified Data.Text                     as Text
+import qualified Data.Text.IO
 import qualified Dhall.Core
+import qualified System.Exit
 import qualified System.FilePath               as FilePath
 import qualified System.IO
 import qualified Turtle                        as Turtle
@@ -125,6 +129,9 @@ type Spago m =
   , MonadMask m
   )
 
+echoErr :: MonadIO m => Text -> m ()
+echoErr = liftIO . Data.Text.IO.hPutStrLn System.IO.stderr
+
 echo :: MonadIO m => Text -> m ()
 echo = Turtle.printf (Turtle.s Turtle.% "\n")
 
@@ -140,8 +147,16 @@ echoDebug str = do
   Turtle.when hasDebug $ do
     echo str
 
-die :: MonadThrow m => Text -> m a
-die reason = throwM $ SpagoError reason
+echoWarning :: MonadIO m => Text -> m ()
+echoWarning = echoErr . ("WARNING: " <>)
+
+echoError :: MonadIO m => Text -> m ()
+echoError = echoErr . ("ERROR: " <>)
+
+die :: MonadIO m => Text -> m a
+die reason = do
+  echoError $ tshow $ SpagoError reason
+  liftIO $ System.Exit.exitFailure
 
 
 -- | Suppress the 'Left' value of an 'Either'
