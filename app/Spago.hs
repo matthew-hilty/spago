@@ -11,7 +11,7 @@ import qualified System.Environment  as Env
 import qualified Turtle              as CLI
 
 import           Spago.Build         (BuildOptions (..), ExtraArg (..), ModuleName (..),
-                                      NoBuild (..), SourcePath (..), TargetPath (..), Watch (..),
+                                      NoBuild (..), SourcePath (..), TargetPath (..),
                                       WithMain (..), NoInstall (..))
 import qualified Spago.Build
 import           Spago.GlobalCache   (CacheFlag (..))
@@ -19,7 +19,7 @@ import           Spago.Messages      as Messages
 import           Spago.Packages      (PackageName (..), PackagesFilter (..), JsonFlag(..))
 import qualified Spago.Packages
 import qualified Spago.PscPackage    as PscPackage
-import           Spago.Watch        (ClearScreen (..))
+import           Spago.Watch        (WatchFlag (..))
 
 
 -- | Commands that this program handles
@@ -111,54 +111,41 @@ parser = do
   command <- projectCommands <|> packageSetCommands <|> pscPackageCommands <|> otherCommands <|> oldCommands
   pure (command, opts)
   where
-    force           = CLI.switch "force" 'f' "Overwrite any project found in the current directory"
-    verbose         = CLI.switch "verbose" 'v' "Enable additional debug logging, e.g. printing `purs` commands"
-    watchBool       = CLI.switch "watch" 'w' "Watch for changes in local files and automatically rebuild"
-    noInstallBool   = CLI.switch "no-install" 'n' "Don't run the automatic installation of packages"
-    clearScreenBool = CLI.switch "clear-screen" 'l' "Clear the screen on rebuild (watch mode only)"
-    noBuildBool     = CLI.switch "no-build" 's' "Skip build step"
-    nodeArgs        = CLI.many $ CLI.opt (Just . ExtraArg) "node-args" 'n' "Argument to pass to node (run/test only)"
-    watch = do
-      res <- watchBool
-      pure $ case res of
-        True  -> Watch
-        False -> BuildOnce
-    noInstall = do
-      res <- noInstallBool
-      pure $ case res of
-        True  -> NoInstall
-        False -> DoInstall
-    clearScreen = do
-      res <- clearScreenBool
-      pure $ case res of
-        True  -> DoClear
-        False -> NoClear
-    noBuild = do
-      res <- noBuildBool
-      pure $ case res of
-        True  -> NoBuild
-        False -> DoBuild
-    jsonFlagBool = CLI.switch "json" 'j' "Produce JSON output"
-    jsonFlag = do
-      res <- jsonFlagBool
-      pure $ case res of
-        True  -> JsonOutputYes
-        False -> JsonOutputNo
+    force = CLI.switch "force" 'f' "Overwrite any project found in the current directory"
+    verbose = CLI.switch "verbose" 'v' "Enable additional debug logging, e.g. printing `purs` commands"
+    nodeArgs = CLI.many $ CLI.opt (Just . ExtraArg) "node-args" 'n' "Argument to pass to node (run/test only)"
+    mainModule = CLI.optional (CLI.opt (Just . ModuleName) "main" 'm' "Module to be used as the application's entry point")
+    toTarget = CLI.optional (CLI.opt (Just . TargetPath) "to" 't' "The target file path")
+    limitJobs = CLI.optional (CLI.optInt "jobs" 'j' "Limit the amount of jobs that can run concurrently")
+    sourcePaths = CLI.many (CLI.opt (Just . SourcePath) "path" 'p' "Source path to include")
+    packageName = CLI.arg (Just . PackageName) "package" "Specify a package name. You can list them with `list-packages`"
+    packageNames = CLI.many $ CLI.arg (Just . PackageName) "package" "Package name to add as dependency"
+    passthroughArgs = many $ CLI.arg (Just . ExtraArg) " ..any `purs compile` option" "Options passed through to `purs compile`; use -- to separate"
+    buildOptions = BuildOptions <$> limitJobs <*> cacheFlag <*> watchFlag <*> sourcePaths <*> noInstallFlag <*> passthroughArgs
+    globalOptions = GlobalOptions <$> verbose
+    noInstallFlag = (flip fmap) (CLI.switch "no-install" 'n' "Don't run the automatic installation of packages") $ \case
+      True  -> NoInstall
+      False -> DoInstall
+    noBuildFlag = (flip fmap) (CLI.switch "no-build" 's' "Skip build step") $ \case
+      True  -> NoBuild
+      False -> DoBuild
+    jsonFlag = (flip fmap) (CLI.switch "json" 'j' "Produce JSON output") $ \case
+      True  -> JsonOutputYes
+      False -> JsonOutputNo
+    watchFlag =
+      let wrap = \case
+            "clear" -> Just WatchAndClear
+            _       -> Just Watch
+          watchSwitch = (flip fmap) (CLI.switch "watch" 'w' "Watch for changes in local files and automatically rebuild.") $ \case
+            True  -> Just Watch
+            False -> Nothing
+      in (CLI.optional $ CLI.opt wrap "watch" 'w' "Watch for changes in local files and automatically rebuild. Set to `clear` to clear the screen on rebuild") <|> watchSwitch
     cacheFlag =
       let wrap = \case
             "skip" -> Just SkipCache
             "update" -> Just NewCache
             _ -> Nothing
       in CLI.optional $ CLI.opt wrap "global-cache" 'c' "Configure the global caching behaviour: skip it with `skip` or force update with `update`"
-    mainModule  = CLI.optional (CLI.opt (Just . ModuleName) "main" 'm' "Module to be used as the application's entry point")
-    toTarget    = CLI.optional (CLI.opt (Just . TargetPath) "to" 't' "The target file path")
-    limitJobs   = CLI.optional (CLI.optInt "jobs" 'j' "Limit the amount of jobs that can run concurrently")
-    sourcePaths = CLI.many (CLI.opt (Just . SourcePath) "path" 'p' "Source path to include")
-    packageName = CLI.arg (Just . PackageName) "package" "Specify a package name. You can list them with `list-packages`"
-    packageNames = CLI.many $ CLI.arg (Just . PackageName) "package" "Package name to add as dependency"
-    passthroughArgs = many $ CLI.arg (Just . ExtraArg) " ..any `purs compile` option" "Options passed through to `purs compile`; use -- to separate"
-    buildOptions = BuildOptions <$> limitJobs <*> cacheFlag <*> watch <*> clearScreen <*> sourcePaths <*> noInstall <*> passthroughArgs
-    globalOptions = GlobalOptions <$> verbose
     packagesFilter =
       let wrap = \case
             "direct"     -> Just DirectDeps
@@ -210,13 +197,13 @@ parser = do
     bundleApp =
       ( "bundle-app"
       , "Bundle the project into an executable"
-      , BundleApp <$> mainModule <*> toTarget <*> noBuild <*> buildOptions
+      , BundleApp <$> mainModule <*> toTarget <*> noBuildFlag <*> buildOptions
       )
 
     bundleModule =
       ( "bundle-module"
       , "Bundle the project into a CommonJS module"
-      , BundleModule <$> mainModule <*> toTarget <*> noBuild <*> buildOptions
+      , BundleModule <$> mainModule <*> toTarget <*> noBuildFlag <*> buildOptions
       )
 
     docs =
@@ -318,10 +305,10 @@ parser = do
     oldCommands = Opts.subparser $ Opts.internal <> bundle <> makeModule
 
     bundle =
-      Opts.command "bundle" $ Opts.info (Bundle <$ mainModule <* toTarget <* noBuild <* buildOptions) mempty
+      Opts.command "bundle" $ Opts.info (Bundle <$ mainModule <* toTarget <* noBuildFlag <* buildOptions) mempty
 
     makeModule =
-      Opts.command "make-module" $ Opts.info (MakeModule <$ mainModule <* toTarget <* noBuild <* buildOptions) mempty
+      Opts.command "make-module" $ Opts.info (MakeModule <$ mainModule <* toTarget <* noBuildFlag <* buildOptions) mempty
 
 
 main :: IO ()

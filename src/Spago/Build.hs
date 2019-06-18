@@ -6,7 +6,6 @@ module Spago.Build
   , bundleApp
   , bundleModule
   , docs
-  , Watch (..)
   , NoBuild (..)
   , NoInstall (..)
   , BuildOptions (..)
@@ -32,8 +31,6 @@ import qualified Spago.Purs           as Purs
 import qualified Spago.Watch          as Watch
 
 
-data Watch = Watch | BuildOnce
-
 -- | Flag to go through with the build step
 --   or skip it, in the case of 'bundleApp' and 'bundleModule'.
 data NoBuild = NoBuild | DoBuild
@@ -44,8 +41,7 @@ data NoInstall = NoInstall | DoInstall
 data BuildOptions = BuildOptions
   { maybeLimit      :: Maybe Int
   , cacheConfig     :: Maybe GlobalCache.CacheFlag
-  , shouldWatch     :: Watch
-  , shouldClear     :: Watch.ClearScreen
+  , watchConfig     :: Maybe Watch.WatchFlag
   , sourcePaths     :: [Purs.SourcePath]
   , noInstall       :: NoInstall
   , passthroughArgs :: [Purs.ExtraArg]
@@ -79,9 +75,9 @@ build BuildOptions{..} maybePostBuild = do
           Just action -> action
           Nothing     -> pure ()
   absoluteProjectGlobs <- traverse makeAbsolute $ Text.unpack . Purs.unSourcePath <$> projectGlobs
-  case shouldWatch of
-    BuildOnce -> buildAction
-    Watch     -> Watch.watch (Set.fromAscList $ fmap Glob.compile absoluteProjectGlobs) shouldClear buildAction
+  case watchConfig of
+    Nothing -> buildAction
+    Just flag -> Watch.watch (Set.fromAscList $ fmap Glob.compile absoluteProjectGlobs) flag buildAction
 
 -- | Start a repl
 repl :: Spago m => [Purs.SourcePath] -> [Purs.ExtraArg] -> m ()

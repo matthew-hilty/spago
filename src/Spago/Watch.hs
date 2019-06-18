@@ -1,5 +1,5 @@
 {-# LANGUAGE TupleSections #-}
-module Spago.Watch (watch, globToParent, ClearScreen (..)) where
+module Spago.Watch (watch, globToParent, WatchFlag (..)) where
 
 -- This code basically comes straight from
 -- https://github.com/commercialhaskell/stack/blob/0740444175f41e6ea5ed236cd2c53681e4730003/src/Stack/FileWatch.hs
@@ -19,11 +19,10 @@ import           System.IO              (getLine)
 import qualified UnliftIO
 import           UnliftIO.Async         (race_)
 
--- Should we clear the screen on rebuild?
-data ClearScreen = DoClear | NoClear
+data WatchFlag = Watch | WatchAndClear
   deriving Eq
 
-watch :: Spago m => Set.Set Glob.Pattern -> ClearScreen -> m () -> m ()
+watch :: Spago m => Set.Set Glob.Pattern -> WatchFlag -> m () -> m ()
 watch globs shouldClear action = do
   let config = Watch.defaultConfig { Watch.confDebounce = Watch.Debounce 0.1 } -- in seconds
   fileWatchConf config shouldClear $ \getGlobs -> do
@@ -43,16 +42,16 @@ withManagerConf conf = UnliftIO.bracket
 fileWatchConf
   :: Spago m
   => Watch.WatchConfig
-  -> ClearScreen
+  -> WatchFlag
   -> ((Set.Set Glob.Pattern -> m ()) -> m ())
   -> m ()
-fileWatchConf watchConfig shouldClear inner = withManagerConf watchConfig $ \manager -> do
+fileWatchConf watchConfig watchFlag inner = withManagerConf watchConfig $ \manager -> do
     allGlobs <- liftIO $ newTVarIO Set.empty
     dirtyVar <- liftIO $ newTVarIO True
     watchVar <- liftIO $ newTVarIO Map.empty
 
     let redisplay maybeMsg = do
-          when (shouldClear == DoClear) $ liftIO clearScreen
+          when (watchFlag == WatchAndClear) $ liftIO clearScreen
           mapM_ echoStr maybeMsg
 
     let onChange event = do
