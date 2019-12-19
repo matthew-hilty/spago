@@ -1,34 +1,38 @@
 module Spago (main) where
 
-import           Spago.Prelude
+import           Spago.Prelude           hiding (stderr, stdout)
 
-import qualified Data.Text           as Text
-import           Data.Version        (showVersion)
-import qualified GHC.IO.Encoding
-import qualified Options.Applicative as Opts
-import qualified Paths_spago         as Pcli
-import qualified System.Environment  as Env
-import qualified Turtle              as CLI
+import qualified Data.Text               as Text
+import           Data.Version            (showVersion)
+import           Foreign.C               (CInt (..))
+import           GHC.IO.Encoding         (setLocaleEncoding, utf8)
+import           GHC.IO.FD               (FD (..))
+import           GHC.IO.Handle.FD        (stderr, stdout)
+import           GHC.IO.Handle.Types     (HandleType (..), nativeNewlineMode)
+import           GHC.IO.Handle.Internals (handleFinalizer, mkHandle)
+import qualified Options.Applicative     as Opts
+import qualified Paths_spago             as Pcli
+import qualified System.Environment      as Env
+import qualified Turtle                  as CLI
 
-import           Spago.Build         (BuildOptions (..), DepsOnly (..), ExtraArg (..),
-                                      ModuleName (..), NoBuild (..), NoInstall (..), NoSearch (..),
-                                      OpenDocs (..), PathType (..), ShareOutput (..),
-                                      SourcePath (..), TargetPath (..), Watch (..), WithMain (..))
+import           Spago.Build             (BuildOptions (..), DepsOnly (..), ExtraArg (..),
+                                          ModuleName (..), NoBuild (..), NoInstall (..), NoSearch (..),
+                                          OpenDocs (..), PathType (..), ShareOutput (..),
+                                          SourcePath (..), TargetPath (..), Watch (..), WithMain (..))
 import qualified Spago.Build
-import qualified Spago.Config        as Config
-import           Spago.Dhall         (TemplateComments (..))
-import           Spago.DryRun        (DryRun (..))
+import qualified Spago.Config            as Config
+import           Spago.Dhall             (TemplateComments (..))
+import           Spago.DryRun            (DryRun (..))
 import qualified Spago.GitHub
-import           Spago.GlobalCache   (CacheFlag (..), getGlobalCacheDir)
-import           Spago.Messages      as Messages
-import           Spago.Packages      (CheckModulesUnique (..), JsonFlag (..), PackagesFilter (..))
+import           Spago.GlobalCache       (CacheFlag (..), getGlobalCacheDir)
+import           Spago.Messages          as Messages
+import           Spago.Packages          (CheckModulesUnique (..), JsonFlag (..), PackagesFilter (..))
 import qualified Spago.Packages
-import qualified Spago.Purs          as Purs
+import qualified Spago.Purs              as Purs
 import           Spago.Types
-import           Spago.Version       (VersionBump (..))
+import           Spago.Version           (VersionBump (..))
 import qualified Spago.Version
-import           Spago.Watch         (ClearScreen (..))
-
+import           Spago.Watch             (ClearScreen (..))
 
 -- | Commands that this program handles
 data Command
@@ -108,12 +112,23 @@ data GlobalOptions = GlobalOptions
   { globalQuiet       :: Bool
   , globalVerbose     :: Bool
   , globalVeryVerbose :: Bool
-  , globalLogHandle   :: Maybe Handle
+  , globalLogHandle   :: Maybe (IO Handle)
   , globalUsePsa      :: UsePsa
   , globalJobs        :: Maybe Int
   , globalConfigPath  :: Maybe Text
   }
 
+handleForFD3 :: IO Handle
+handleForFD3 =
+  mkHandle
+    (FD (CInt 3) 0)
+    "<nonstandard-stream>"
+    WriteHandle
+    False
+    (Just utf8)
+    nativeNewlineMode
+    (Just handleFinalizer)
+    Nothing
 
 parser :: CLI.Parser (Command, GlobalOptions)
 parser = do
@@ -133,14 +148,16 @@ parser = do
             "transitive" -> Just TransitiveDeps
             _            -> Nothing
       in CLI.optional $ CLI.opt wrap "filter" 'f' "Filter packages: direct deps with `direct`, transitive ones with `transitive`"
+    outputStream :: CLI.Parser (Maybe (IO Handle))
     outputStream =
       let wrap = \case
-            "stdout" -> Just stdout
-            "1"      -> Just stdout
-            "stderr" -> Just stderr
-            "2"      -> Just stderr
+            "stdout" -> Just $ pure stdout
+            "1"      -> Just $ pure stdout
+            "stderr" -> Just $ pure stderr
+            "2"      -> Just $ pure stderr
+            "3"      -> Just handleForFD3
             _        -> Nothing
-      in CLI.optional $ CLI.opt wrap "output-stream" 'O' "Select the output stream to which logging should be directed: any of `stdout`, `1`, `stderr`, or `2`."
+      in CLI.optional $ CLI.opt wrap "output-stream" 'O' "Select the output stream for logging: any of `stdout`, `1`, `stderr`, `2`, or `3`."
     versionBump = CLI.arg Spago.Version.parseVersionBump "bump" "How to bump the version. Acceptable values: 'major', 'minor', 'patch', or a version (e.g. 'v1.2.3')."
 
     force   = CLI.switch "force" 'f' "Overwrite any project found in the current directory"
@@ -359,7 +376,7 @@ runWithEnv :: GlobalOptions -> Spago a -> IO a
 runWithEnv GlobalOptions{..} app = do
   let verbose = not globalQuiet && (globalVerbose || globalVeryVerbose)
   let logDebug' str = when verbose $ hPutStrLn stderr str
-  let logHandle = fromMaybe stderr globalLogHandle
+  logHandle <- fromMaybe (pure stderr) globalLogHandle
   logOptions' <- logOptionsHandle logHandle verbose
   let logOptions
         = setLogUseTime globalVeryVerbose
